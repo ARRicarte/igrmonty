@@ -34,6 +34,8 @@ typedef struct params_t {
   // electron temperature models
   double TP_OVER_TE;
   double beta_crit;
+  double beta_crit_coefficient;
+  int with_electrons;
   double trat_small;
   double trat_large;
   double Thetae_max;

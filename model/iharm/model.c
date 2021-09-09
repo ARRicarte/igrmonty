@@ -3,8 +3,6 @@
 #include "model_radiation.h"
 
 #define NVAR (10)
-#define USE_FIXED_TPTE (0)
-#define USE_MIXED_TPTE (1)
 
 // electron model. these values will be overwritten by anything found in par.c
 // or in the runtime parameter file.
@@ -12,12 +10,14 @@
 //     0 : constant TP_OVER_TE
 //     1 : use dump file model (kawazura?)
 //     2: use mixed TP_OVER_TE (moscibrodzka "beta" model)
+//     3: use critical beta TP_OVER_TE (Anantua)
 static double tp_over_te = 3.;
 static double trat_small = 2.;
 static double trat_large = 70.;
 static double beta_crit = 1.;
+static double beta_crit_coefficient = 0.5;
 static double Thetae_max = 1.e100;
-static int with_electrons;
+static int with_electrons = 2;
 
 // fluid data
 double ****bcon;
@@ -315,8 +315,13 @@ double thetae_func(double uu, double rho, double B, double kel)
     double trat = trat_large * b2/(1.+b2) + trat_small /(1.+b2);
     if (B == 0) trat = trat_large;
     thetae = (MP/ME) * (game-1.) * (gamp-1.) / ( (gamp-1.) + (game-1.)*trat ) * uu / rho;
+  } else if (with_electrons == 3 ) {
+    double beta = uu * (gam-1.) / 0.5 / B / B;
+    double Te_over_Ttot = beta_crit_coefficient * exp(-beta / beta_crit);
+    double trat = (1.0 - Te_over_Ttot) / Te_over_Ttot;
+    if (B == 0) trat = 1e10;  //As beta goes to 0, the temperature ratio diverges.  I just set it to an arbitrary large number.
+    thetae = fmax(1e-3, (MP/ME) * (game-1.) * (gamp-1.) / ( (gamp-1.) + (game-1.)*trat ) * uu / rho);  //Put in a hidden floor for consistency with IPOLE.
   }
-
   return 1./(1./thetae + 1./Thetae_max);
 }
 
@@ -488,6 +493,8 @@ void init_data(int argc, char *argv[], Params *params)
     trat_small = params->trat_small;
     trat_large = params->trat_large;
     beta_crit = params->beta_crit;
+    beta_crit_coefficient = params->beta_crit_coefficient;
+    with_electrons = params->with_electrons;
     biasTuning = params->biasTuning;
     Thetae_max = params->Thetae_max;
   } else {
@@ -507,11 +514,11 @@ void init_data(int argc, char *argv[], Params *params)
   hdf5_set_directory("/header/");
 
   // flag reads
-  with_electrons = 0;
+  int with_electrons_overwrite = 0;
   with_radiation = 0;
   with_derefine_poles = 0;
   if ( hdf5_exists("has_electrons") )
-    hdf5_read_single_val(&with_electrons, "has_electrons", H5T_STD_I32LE);
+    hdf5_read_single_val(&with_electrons_overwrite, "has_electrons", H5T_STD_I32LE);
   if ( hdf5_exists("has_radiation") )
     hdf5_read_single_val(&with_radiation, "has_radiation", H5T_STD_I32LE);
 
@@ -538,28 +545,24 @@ void init_data(int argc, char *argv[], Params *params)
   // conditional reads
   game = 4./3;
   gamp = 5./3;
-  if (with_electrons) {
+  if (with_electrons_overwrite) {
     fprintf(stderr, "custom electron model loaded...\n");
     hdf5_read_single_val(&game, "gam_e", H5T_IEEE_F64LE);
     hdf5_read_single_val(&gamp, "gam_p", H5T_IEEE_F64LE);
+    with_electrons = with_electrons_overwrite;
   }
 
-  if (!USE_FIXED_TPTE && !USE_MIXED_TPTE) {
-    if (with_electrons != 1) {
-      fprintf(stderr, "! no electron temperature model specified in model/iharm.c\n");
-      exit(-3);
-    }
-    with_electrons = 1;
-    Thetae_unit = MP/ME;
-  } else if (USE_FIXED_TPTE && !USE_MIXED_TPTE) {
+  if (with_electrons == 0) {
     with_electrons = 0; // force TP_OVER_TE to overwrite electron temperatures
     fprintf(stderr, "using fixed tp_over_te ratio = %g\n", tp_over_te);
     Thetae_unit = MP/ME * (gam-1.) / (1. + tp_over_te);
     Thetae_unit = 2./3. * MP/ME / (2. + tp_over_te);
-  } else if (USE_MIXED_TPTE && !USE_FIXED_TPTE) {
+  } else if (with_electrons == 2) {
     Thetae_unit = 2./3. * MP/ME / 5.;
-    with_electrons = 2;
     fprintf(stderr, "using mixed tp_over_te with trat_small = %g and trat_large = %g\n", trat_small, trat_large);
+  } else if (with_electrons == 3) {
+    Thetae_unit = 2./3. * MP/ME / 5.;
+    fprintf(stderr, "using critical beta tp_over_te with beta_crit_coefficient = %g and beta_crit = %g\n", beta_crit_coefficient, beta_crit);
   } else {
     fprintf(stderr, "! please change electron model in model/iharm.c\n");
     exit(-3);
@@ -571,7 +574,7 @@ void init_data(int argc, char *argv[], Params *params)
     hdf5_read_single_val(&M_unit, "M_unit", H5T_IEEE_F64LE);
     hdf5_read_single_val(&T_unit, "T_unit", H5T_IEEE_F64LE);
     hdf5_read_single_val(&L_unit, "L_unit", H5T_IEEE_F64LE);
-    if (!USE_FIXED_TPTE && !USE_MIXED_TPTE) {
+    if (with_electrons == 1) {
       hdf5_read_single_val(&Thetae_unit, "Thetae_unit", H5T_IEEE_F64LE);
     }
     hdf5_read_single_val(&MBH, "Mbh", H5T_IEEE_F64LE);
@@ -809,6 +812,8 @@ void report_spectrum(int N_superph_made, Params *params)
   } else if (with_electrons == 2) {
     h5io_add_data_dbl(fid, "/params/electrons/rlow", trat_small);
     h5io_add_data_dbl(fid, "/params/electrons/rhigh", trat_large);
+  } else if (with_electrons == 3) {
+    h5io_add_data_dbl(fid, "/params/electrons/beta_crit_coefficient", beta_crit_coefficient);
   }
   h5io_add_data_int(fid, "/params/electrons/type", with_electrons);
 

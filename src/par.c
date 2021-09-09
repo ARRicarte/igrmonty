@@ -16,6 +16,8 @@ void load_par_from_argv(int argc, char *argv[], Params *params) {
 
   params->TP_OVER_TE = 3.;
   params->beta_crit = 1.;
+  params->beta_crit_coefficient = 0.5;
+  params->with_electrons = 2;
   params->trat_small = 1.;
   params->trat_large = 10.;
   params->Thetae_max = 1.e100;
@@ -67,6 +69,8 @@ void load_par (const char *fname, Params *params) {
     // electron temperature models
     read_param(line, "TP_OVER_TE", &(params->TP_OVER_TE), TYPE_DBL);
     read_param(line, "beta_crit", &(params->beta_crit), TYPE_DBL);
+    read_param(line, "beta_crit_coefficient", &(params->beta_crit_coefficient), TYPE_DBL);
+    read_param(line, "with_electrons", &(params->with_electrons), TYPE_INT);
     read_param(line, "trat_small", &(params->trat_small), TYPE_DBL);
     read_param(line, "trat_large", &(params->trat_large), TYPE_DBL);
     read_param(line, "Thetae_max", &(params->Thetae_max), TYPE_DBL);
